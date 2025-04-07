@@ -19,9 +19,15 @@ func (state *apiState) middlewareMetricsInc(next http.Handler) http.Handler {
 }
 
 func (state *apiState) hitsHandler(w http.ResponseWriter, request *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(200)
-	io.WriteString(w, fmt.Sprintf("Hits: %d", state.fileserverHits.Load()))
+	io.WriteString(w, fmt.Sprintf(
+`<html>
+  <body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited %d times!</p>
+  </body>
+  </html>`, state.fileserverHits.Load()))
 }
 
 func (state *apiState) resetHitsHandler(w http.ResponseWriter, request *http.Request) {
@@ -53,10 +59,10 @@ func main() {
 		Handler: mux,
 	}
 	mux.Handle("GET /app/", http.StripPrefix("/app", metrics.middlewareMetricsInc(http.FileServer(http.Dir("./site")))))
-	mux.HandleFunc("GET /healthz", readiness)
+	mux.HandleFunc("GET /api/healthz", readiness)
 
-	mux.HandleFunc("GET /metrics", metrics.hitsHandler)
-	mux.HandleFunc("POST /reset", metrics.resetHitsHandler)
+	mux.HandleFunc("GET /admin/metrics", metrics.hitsHandler)
+	mux.HandleFunc("POST /admin/reset", metrics.resetHitsHandler)
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Println(err) 
