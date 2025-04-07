@@ -52,11 +52,11 @@ func main() {
 		Addr: ":8080",
 		Handler: mux,
 	}
-	mux.Handle("/app/", http.StripPrefix("/app", metrics.middlewareMetricsInc(http.FileServer(http.Dir("./site")))))
-	mux.HandleFunc("/healthz", readiness)
+	mux.Handle("GET /app/", http.StripPrefix("/app", metrics.middlewareMetricsInc(http.FileServer(http.Dir("./site")))))
+	mux.HandleFunc("GET /healthz", readiness)
 
-	mux.HandleFunc("/metrics", metrics.hitsHandler)
-	mux.HandleFunc("/reset", metrics.resetHitsHandler)
+	mux.HandleFunc("GET /metrics", metrics.hitsHandler)
+	mux.HandleFunc("POST /reset", metrics.resetHitsHandler)
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Println(err) 
