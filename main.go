@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync/atomic"
+	"encoding/json"
 )
 
 type apiState struct {
@@ -45,6 +46,51 @@ func readiness(w http.ResponseWriter, request *http.Request) {
 	io.WriteString(w, "OK")
 }
 
+func validateChirp(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Body string `json:"body"`
+	}
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+	type validResponse struct {
+		Valid bool `json:"valid"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	w.Header().Set("Content-Type", "application/json")
+
+	if err := decoder.Decode(&params); err != nil {
+		fmt.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		resBody := errorResponse{
+			Error: fmt.Sprintf("%s", err),
+		}
+		resStr, _ := json.Marshal(resBody)
+		w.Write(resStr)
+		return
+	}
+
+	if len(params.Body) > 140 {
+		w.WriteHeader(400)
+		resBody := errorResponse{
+			Error: "Chirp is too long",
+		}
+		resStr, _ := json.Marshal(resBody)
+		w.Write(resStr)
+		return
+	}
+	
+	w.WriteHeader(200)
+	resBody := validResponse{
+		Valid: true,
+	}
+	resStr, _ := json.Marshal(resBody)
+	w.Write(resStr)
+	return
+}
+
 func main() {
 
 	metrics := &apiState{
@@ -63,6 +109,8 @@ func main() {
 
 	mux.HandleFunc("GET /admin/metrics", metrics.hitsHandler)
 	mux.HandleFunc("POST /admin/reset", metrics.resetHitsHandler)
+
+	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Println(err) 
