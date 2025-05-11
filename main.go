@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync/atomic"
 	"encoding/json"
+	"regexp"
 )
 
 type apiState struct {
@@ -54,7 +55,7 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 		Error string `json:"error"`
 	}
 	type validResponse struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -81,10 +82,19 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 		w.Write(resStr)
 		return
 	}
+	profane := []string{"kerfuffle", "sharbert", "fornax"}
+
+	cleaned := params.Body
+
+	for _, s := range(profane) {
+		re := regexp.MustCompile(`(?i)`+s)
+		cleaned = re.ReplaceAllString(cleaned, "****")
+	}
+		
 	
 	w.WriteHeader(200)
 	resBody := validResponse{
-		Valid: true,
+		CleanedBody: cleaned,
 	}
 	resStr, _ := json.Marshal(resBody)
 	w.Write(resStr)
