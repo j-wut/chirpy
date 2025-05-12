@@ -9,10 +9,15 @@ import (
 	"sync/atomic"
 	"encoding/json"
 	"regexp"
+	"os"
+	"database/sql"
+
+	"github.com/j-wut/chirpy/internal/database"
 )
 
 type apiState struct {
 	fileserverHits atomic.Int32
+	dbQueries *database.Queries
 }
 
 func (state *apiState) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -105,8 +110,17 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		panic(fmt.Errorf("Error Connecting to DB: %s", err))
+	}
+
+	dbQueries := database.New(db)
+
 	metrics := &apiState{
 		fileserverHits: atomic.Int32{},
+		dbQueries: dbQueries,
 	}
 
 	metrics.fileserverHits.Store(0)
