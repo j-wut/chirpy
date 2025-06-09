@@ -86,12 +86,6 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	type createUserRequest struct {
 		Email string `json:"email"`
 	}
-	type createUserResponse struct {
-		ID uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email string `json:"email"`
-	}
 
 	decoder := json.NewDecoder(r.Body)
 	requestBody := createUserRequest{}
@@ -120,13 +114,7 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resBody := createUserResponse{
-		ID: user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email: user.Email,
-	}
-	resStr, err := json.Marshal(resBody)
+	resStr, err := json.Marshal(user)
 	if err != nil {
 		fmt.Printf("Error Marshalling new user: %s", err)
 		w.WriteHeader(500)
@@ -144,20 +132,8 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Body string `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
-	}
-	type createChirpResponse struct {
-		ID uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Body string `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
-	}
-
 	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
+	params := database.CreateChirpParams{}
 	w.Header().Set("Content-Type", "application/json")
 
 	if err := decoder.Decode(&params); err != nil {
@@ -181,16 +157,13 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profane := []string{"kerfuffle", "sharbert", "fornax"}
-
-	cleaned := params.Body
-
 	for _, s := range(profane) {
 		re := regexp.MustCompile(`(?i)`+s)
-		cleaned = re.ReplaceAllString(cleaned, "****")
+		params.Body = re.ReplaceAllString(params.Body, "****")
 	}
 	
 
-	chirp, err := cfg.dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{Body: cleaned, UserID:params.UserID})
+	chirp, err := cfg.dbQueries.CreateChirp(r.Context(), params) 
 	if err != nil {
 		w.WriteHeader(500)
 		resBody := errorResponse{
@@ -203,7 +176,37 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 
 	
 	w.WriteHeader(201)
-	resStr, _ := json.Marshal(createChirpResponse(chirp))
+	resStr, _ := json.Marshal(chirp)
+	w.Write(resStr)
+	return
+}
+
+func (cfg *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
+	type chirp struct {
+		ID        uuid.UUID	`json:"id"`
+		CreatedAt time.Time	`json:"created_at"`
+		UpdatedAt time.Time	`json:"updated_at"`
+		Body      string	`json:"body"`
+		UserID    uuid.UUID	`json:"user_id"`
+	}
+
+
+	chirps, err := cfg.dbQueries.GetAllChirps(r.Context())
+	if err != nil {
+		w.WriteHeader(500)
+		resBody := errorResponse{
+			Error: fmt.Sprintf("%s", err),
+		}
+		resStr, _ := json.Marshal(resBody)
+		w.Write(resStr)
+		return
+	}
+	
+
+
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	resStr, _ := json.Marshal(chirps)
 	w.Write(resStr)
 	return
 }
@@ -239,6 +242,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", metrics.resetUsers)
 
 	mux.HandleFunc("POST /api/chirps", metrics.createChirp)
+	mux.HandleFunc("GET /api/chirps", metrics.getAllChirps)
 	mux.HandleFunc("POST /api/users", metrics.createUser)
 
 	if err := server.ListenAndServe(); err != nil {
