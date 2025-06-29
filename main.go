@@ -211,6 +211,35 @@ func (cfg *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
+	requestedId, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		w.WriteHeader(500)
+		resBody := errorResponse{
+			Error: fmt.Sprintf("%s", err),
+		}
+		resStr, _ := json.Marshal(resBody)
+		w.Write(resStr)
+		return
+	}
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), requestedId)
+	if err != nil {
+		w.WriteHeader(500)
+		resBody := errorResponse{
+			Error: fmt.Sprintf("%s", err),
+		}
+		resStr, _ := json.Marshal(resBody)
+		w.Write(resStr)
+		return
+	}
+
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	resStr, _ := json.Marshal(chirp)
+	w.Write(resStr)
+	return
+}
+
 func main() {
 
 	godotenv.Load()
@@ -243,6 +272,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/chirps", metrics.createChirp)
 	mux.HandleFunc("GET /api/chirps", metrics.getAllChirps)
+	mux.HandleFunc("GET /api/chirps/{id}", metrics.getChirp)
 	mux.HandleFunc("POST /api/users", metrics.createUser)
 
 	if err := server.ListenAndServe(); err != nil {
