@@ -18,10 +18,28 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/j-wut/chirpy/internal/database"
+  "github.com/j-wut/chirpy/internal/auth"
 )
 
-type errorResponse struct {
-	Error string `json:"error"`
+type UserRequest struct {
+	Email string `json:"email"`
+  Password string `json:"password"`
+}
+
+type ReadableUser struct {
+        ID             uuid.UUID `json:"id"`
+        CreatedAt      time.Time `json:"created_at"`
+        UpdatedAt      time.Time `json:"updated_at"`
+        Email          string    `json:"email"`
+}
+
+func DatabaseUserToReadable(user database.User) ReadableUser {
+  return ReadableUser{
+    user.ID,
+    user.CreatedAt,
+    user.UpdatedAt,
+    user.Email,
+  }
 }
 
 type apiConfig struct {
@@ -40,7 +58,7 @@ func (cfg *apiConfig) hitsHandler(w http.ResponseWriter, request *http.Request) 
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(200)
 	io.WriteString(w, fmt.Sprintf(
-`<html>
+  `<html>
   <body>
     <h1>Welcome, Chirpy Admin</h1>
     <p>Chirpy has been visited %d times!</p>
@@ -83,53 +101,87 @@ func (cfg *apiConfig) resetUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
-	type createUserRequest struct {
-		Email string `json:"email"`
-	}
-
 	decoder := json.NewDecoder(r.Body)
-	requestBody := createUserRequest{}
-	w.Header().Set("Content-Type", "application/json")
+	requestBody := UserRequest{}
 
 	if err := decoder.Decode(&requestBody); err != nil {
 		fmt.Printf("Error decoding parameters: %s", err)
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
-	user, err := cfg.dbQueries.CreateUser(r.Context(), requestBody.Email)
+  hashedPass, err := auth.HashPassword(requestBody.Password)
+  if err != nil {
+    fmt.Printf("Error hashing password: %s", err)
+    w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
+    return
+  }
+
+	user, err := cfg.dbQueries.CreateUser(r.Context(), database.CreateUserParams{requestBody.Email, hashedPass})
 	if err != nil {
 		fmt.Printf("Error creating user: %s", err)
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
-	resStr, err := json.Marshal(user)
+	resStr, err := json.Marshal(DatabaseUserToReadable(user))
 	if err != nil {
-		fmt.Printf("Error Marshalling new user: %s", err)
+		fmt.Printf("Error Marshalling user: %s", err)
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
 	w.Write(resStr)
 	return
 }
+
+func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	requestBody := UserRequest{}
+
+	if err := decoder.Decode(&requestBody); err != nil {
+		fmt.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
+		return
+	}
+
+	user, err := cfg.dbQueries.GetUser(r.Context(), requestBody.Email)
+	if err != nil {
+		fmt.Printf("Error retrieving user: %s", err)
+		w.WriteHeader(401)
+    w.Write([]byte("Incorrect email or password"))
+		return
+	}
+  
+  err = auth.CheckPasswordHash(requestBody.Password, user.HashedPassword)
+  if err != nil {
+    fmt.Println("Invalid Password")
+    w.WriteHeader(401)
+    w.Write([]byte("Incorrect email or password"))
+    return
+  }
+
+	resStr, err := json.Marshal(DatabaseUserToReadable(user))
+	if err != nil {
+		fmt.Printf("Error Marshalling user: %s", err)
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resStr)
+	return
+}
+
 
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
@@ -139,21 +191,13 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	if err := decoder.Decode(&params); err != nil {
 		fmt.Printf("Error decoding parameters: %s", err)
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+    w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
 	if len(params.Body) > 140 {
 		w.WriteHeader(400)
-		resBody := errorResponse{
-			Error: "Chirp is too long",
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+		w.Write([]byte("Chirp is too long"))
 		return
 	}
 	profane := []string{"kerfuffle", "sharbert", "fornax"}
@@ -166,11 +210,7 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	chirp, err := cfg.dbQueries.CreateChirp(r.Context(), params) 
 	if err != nil {
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+    w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -194,15 +234,9 @@ func (cfg *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
 	chirps, err := cfg.dbQueries.GetAllChirps(r.Context())
 	if err != nil {
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
-	}
-	
-
+	}	
 
 	w.WriteHeader(200)
 	w.Header().Set("Content-Type", "application/json")
@@ -215,21 +249,13 @@ func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	requestedId, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 	chirp, err := cfg.dbQueries.GetChirp(r.Context(), requestedId)
 	if err != nil {
 		w.WriteHeader(500)
-		resBody := errorResponse{
-			Error: fmt.Sprintf("%s", err),
-		}
-		resStr, _ := json.Marshal(resBody)
-		w.Write(resStr)
+    w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -274,6 +300,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", metrics.getAllChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", metrics.getChirp)
 	mux.HandleFunc("POST /api/users", metrics.createUser)
+  mux.HandleFunc("POST /api/login", metrics.login)
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Println(err) 
