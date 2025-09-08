@@ -22,15 +22,17 @@ import (
 )
 
 type UserRequest struct {
-	Email string `json:"email"`
-  Password string `json:"password"`
+	Email             string  `json:"email"`
+  Password          string  `json:"password"`
+  ExpiresInSeconds  uint    `json:"expires_in_seconds"`
 }
 
 type ReadableUser struct {
-        ID             uuid.UUID `json:"id"`
-        CreatedAt      time.Time `json:"created_at"`
-        UpdatedAt      time.Time `json:"updated_at"`
-        Email          string    `json:"email"`
+  ID          uuid.UUID `json:"id"`
+  CreatedAt   time.Time `json:"created_at"`
+  UpdatedAt   time.Time `json:"updated_at"`
+  Email       string    `json:"email"`
+  Token       string    `json:"token,omitempty"` 
 }
 
 func DatabaseUserToReadable(user database.User) ReadableUser {
@@ -39,12 +41,14 @@ func DatabaseUserToReadable(user database.User) ReadableUser {
     user.CreatedAt,
     user.UpdatedAt,
     user.Email,
+    "",
   }
 }
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries *database.Queries
+  jwtSecret string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -102,12 +106,11 @@ func (cfg *apiConfig) resetUsers(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
-	requestBody := UserRequest{}
+  requestBody := UserRequest{}
 
 	if err := decoder.Decode(&requestBody); err != nil {
 		fmt.Printf("Error decoding parameters: %s", err)
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -115,7 +118,6 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
   if err != nil {
     fmt.Printf("Error hashing password: %s", err)
     w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("%s", err)))
     return
   }
 
@@ -123,7 +125,6 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fmt.Printf("Error creating user: %s", err)
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -131,7 +132,6 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fmt.Printf("Error Marshalling user: %s", err)
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -148,7 +148,6 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	if err := decoder.Decode(&requestBody); err != nil {
 		fmt.Printf("Error decoding parameters: %s", err)
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -167,12 +166,29 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
     w.Write([]byte("Incorrect email or password"))
     return
   }
+  
+  readableUser := DatabaseUserToReadable(user)
 
-	resStr, err := json.Marshal(DatabaseUserToReadable(user))
+  var tokenDuration time.Duration
+  if requestBody.ExpiresInSeconds == 0 || time.Second * time.Duration(requestBody.ExpiresInSeconds) > time.Hour {
+    tokenDuration = time.Hour
+  } else {
+    tokenDuration = time.Second * time.Duration(requestBody.ExpiresInSeconds)
+  }
+
+  jwtToken, err := auth.MakeJWT(user.ID, cfg.jwtSecret, tokenDuration)
+  if err != nil {
+    fmt.Printf("Error generating JWT: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+
+  readableUser.Token = jwtToken
+
+  resStr, err := json.Marshal(readableUser)
 	if err != nil {
 		fmt.Printf("Error Marshalling user: %s", err)
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -184,14 +200,26 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 
 
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
-	decoder := json.NewDecoder(r.Body)
-	params := database.CreateChirpParams{}
-	w.Header().Set("Content-Type", "application/json")
+  bearer, err := auth.GetBearerToken(r.Header)
+  if err != nil {
+    w.WriteHeader(401)
+    return
+  }
 
-	if err := decoder.Decode(&params); err != nil {
+  userID, err := auth.ValidateJWT(bearer, cfg.jwtSecret)
+  if err != nil {
+    w.WriteHeader(401)
+    return
+  }
+
+  decoder := json.NewDecoder(r.Body)
+  params := database.CreateChirpParams{
+    UserID: userID,
+  }
+
+	if err = decoder.Decode(&params); err != nil {
 		fmt.Printf("Error decoding parameters: %s", err)
 		w.WriteHeader(500)
-    w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
@@ -209,13 +237,14 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 
 	chirp, err := cfg.dbQueries.CreateChirp(r.Context(), params) 
 	if err != nil {
+    fmt.Printf("Error saving chirp: %s", err)
 		w.WriteHeader(500)
-    w.Write([]byte(fmt.Sprintf("%s", err)))
 		return
 	}
 
 	
 	w.WriteHeader(201)
+	w.Header().Set("Content-Type", "application/json")
 	resStr, _ := json.Marshal(chirp)
 	w.Write(resStr)
 	return
@@ -281,6 +310,7 @@ func main() {
 	metrics := &apiConfig{
 		fileserverHits: atomic.Int32{},
 		dbQueries: dbQueries,
+    jwtSecret: os.Getenv("JWT_SECRET"),
 	}
 
 	metrics.fileserverHits.Store(0)

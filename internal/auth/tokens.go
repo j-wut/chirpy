@@ -2,11 +2,22 @@ package auth
 
 import (
   "errors"
+  "net/http"
+  "strings"
   "time"
 
   "github.com/golang-jwt/jwt/v5"
   "github.com/google/uuid"
 )
+
+func GetBearerToken(headers http.Header) (string, error) {
+  authHeader := headers.Get("Authorization")
+  if authHeader == "" {
+    return "", errors.New("Authorization header missing")
+  }
+
+  return strings.TrimPrefix(authHeader, "Bearer "), nil
+}
 
 func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (string, error) {
   claims := jwt.RegisteredClaims{
