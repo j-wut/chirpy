@@ -2,7 +2,9 @@ package auth
 
 import (
   "errors"
+  "encoding/hex"
   "net/http"
+  "crypto/rand"
   "strings"
   "time"
 
@@ -51,4 +53,13 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
   } else {
     return uuid.Nil, errors.New("invalid claim")
   }
+}
+
+func MakeRefreshToken() (string, error) {
+  b := make([]byte, 32)
+  if _, err := rand.Read(b); err != nil {
+    return "", err
+  }
+  token := hex.EncodeToString(b)
+  return token, nil
 }

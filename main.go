@@ -28,11 +28,12 @@ type UserRequest struct {
 }
 
 type ReadableUser struct {
-  ID          uuid.UUID `json:"id"`
-  CreatedAt   time.Time `json:"created_at"`
-  UpdatedAt   time.Time `json:"updated_at"`
-  Email       string    `json:"email"`
-  Token       string    `json:"token,omitempty"` 
+  ID            uuid.UUID `json:"id"`
+  CreatedAt     time.Time `json:"created_at"`
+  UpdatedAt     time.Time `json:"updated_at"`
+  Email         string    `json:"email"`
+  Token         string    `json:"token,omitempty"` 
+  RefreshToken  string    `json:"refresh_token,omitempty"`
 }
 
 func DatabaseUserToReadable(user database.User) ReadableUser {
@@ -41,6 +42,7 @@ func DatabaseUserToReadable(user database.User) ReadableUser {
     user.CreatedAt,
     user.UpdatedAt,
     user.Email,
+    "",
     "",
   }
 }
@@ -97,7 +99,7 @@ func (cfg *apiConfig) resetUsers(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Error resetting users: %s", err)
 		w.WriteHeader(500)
 		return
-	}
+}
 
 	w.WriteHeader(200)
 	return
@@ -185,6 +187,22 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 
   readableUser.Token = jwtToken
 
+  refreshToken, err := auth.MakeRefreshToken()
+  if err != nil {
+    fmt.Printf("Error generating refresh token: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+
+  _, err = cfg.dbQueries.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{refreshToken, time.Now().AddDate(0,0,60), readableUser.ID})
+  if err != nil {
+    fmt.Printf("Error saving refresh token: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+
+  readableUser.RefreshToken = refreshToken
+
   resStr, err := json.Marshal(readableUser)
 	if err != nil {
 		fmt.Printf("Error Marshalling user: %s", err)
@@ -198,6 +216,64 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+func (cfg *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
+  bearer, err := auth.GetBearerToken(r.Header)
+  if err != nil {
+    fmt.Println("Invalid refresh token")
+    w.WriteHeader(401)
+    return
+  }
+
+  refreshToken, err := cfg.dbQueries.GetRefreshToken(r.Context(), bearer)
+  if err != nil {
+    fmt.Println("Invalid refresh token")
+    w.WriteHeader(401)
+    return
+  }
+
+  jwtToken, err := auth.MakeJWT(refreshToken.UserID, cfg.jwtSecret, time.Hour)
+  if err != nil {
+    fmt.Printf("Error generating JWT: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+  
+  type TokenResponse struct {
+    Token string `json:"token"`
+  }
+  res := TokenResponse{jwtToken}
+  resStr, err := json.Marshal(res)
+	if err != nil {
+		fmt.Printf("Error Marshalling Token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resStr)
+	return
+}
+
+func (cfg *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
+  bearer, err := auth.GetBearerToken(r.Header)
+  if err != nil {
+    fmt.Println("Invalid refresh token")
+    w.WriteHeader(401)
+    return
+  }
+
+  err = cfg.dbQueries.RevokeRefreshToken(r.Context(), bearer)
+  if err != nil {
+    fmt.Println("Invalid refresh token")
+    w.WriteHeader(401)
+    return
+  }
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(204)
+	return
+}
 
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
   bearer, err := auth.GetBearerToken(r.Header)
@@ -331,6 +407,8 @@ func main() {
 	mux.HandleFunc("GET /api/chirps/{id}", metrics.getChirp)
 	mux.HandleFunc("POST /api/users", metrics.createUser)
   mux.HandleFunc("POST /api/login", metrics.login)
+  mux.HandleFunc("POST /api/refresh", metrics.refresh)
+  mux.HandleFunc("POST /api/revoke", metrics.revoke)
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Println(err) 
