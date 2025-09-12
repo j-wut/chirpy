@@ -12,5 +12,8 @@ RETURNING *;
 -- name: GetUser :one
 SELECT * FROM users WHERE email = $1;
 
+-- name: ChangeEmailPassword :exec
+UPDATE users set email = $2, hashed_password = $3 WHERE id = $1;
+
 -- name: ResetUsers :exec
 DELETE FROM users;

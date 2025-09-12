@@ -7,7 +7,24 @@ package database
 
 import (
 	"context"
+
+	"github.com/google/uuid"
 )
+
+const changeEmailPassword = `-- name: ChangeEmailPassword :exec
+UPDATE users set email = $2, hashed_password = $3 WHERE id = $1
+`
+
+type ChangeEmailPasswordParams struct {
+	ID             uuid.UUID `json:"id"`
+	Email          string    `json:"email"`
+	HashedPassword string    `json:"hashed_password"`
+}
+
+func (q *Queries) ChangeEmailPassword(ctx context.Context, arg ChangeEmailPasswordParams) error {
+	_, err := q.db.ExecContext(ctx, changeEmailPassword, arg.ID, arg.Email, arg.HashedPassword)
+	return err
+}
 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (id, created_at, updated_at, email, hashed_password)

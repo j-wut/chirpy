@@ -275,6 +275,102 @@ func (cfg *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+func (cfg *apiConfig) changePassword(w http.ResponseWriter, r *http.Request) {
+  bearer, err := auth.GetBearerToken(r.Header)
+  if err != nil {
+    w.WriteHeader(401)
+    return
+  }
+
+  userID, err := auth.ValidateJWT(bearer, cfg.jwtSecret)
+  if err != nil {
+    w.WriteHeader(401)
+    return
+  }
+
+
+	decoder := json.NewDecoder(r.Body)
+	requestBody := UserRequest{}
+	if err := decoder.Decode(&requestBody); err != nil {
+		fmt.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}  
+
+  hashedPass, err := auth.HashPassword(requestBody.Password)
+  if err != nil {
+    fmt.Printf("Error hashing password: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+
+  err = cfg.dbQueries.ChangeEmailPassword(r.Context(), database.ChangeEmailPasswordParams{userID, requestBody.Email, hashedPass})
+	if err != nil {
+		fmt.Printf("Error updating password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+  user, err := cfg.dbQueries.GetUser(r.Context(), requestBody.Email)
+	if err != nil {
+		fmt.Printf("Error retrieving user: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+  readableUser := DatabaseUserToReadable(user)
+
+  var tokenDuration time.Duration
+  if requestBody.ExpiresInSeconds == 0 || time.Second * time.Duration(requestBody.ExpiresInSeconds) > time.Hour {
+    tokenDuration = time.Hour
+  } else {
+    tokenDuration = time.Second * time.Duration(requestBody.ExpiresInSeconds)
+  }
+
+  jwtToken, err := auth.MakeJWT(user.ID, cfg.jwtSecret, tokenDuration)
+  if err != nil {
+    fmt.Printf("Error generating JWT: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+
+  readableUser.Token = jwtToken
+
+  oldRefresh, _ := cfg.dbQueries.GetRefreshTokenFromUserID(r.Context(), userID)
+  if err = cfg.dbQueries.RevokeRefreshToken(r.Context(), oldRefresh.Token); err != nil {
+    fmt.Println("error revoking old refresh Token")
+  }
+
+  refreshToken, err := auth.MakeRefreshToken()
+  if err != nil {
+    fmt.Printf("Error generating refresh token: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+
+  _, err = cfg.dbQueries.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{refreshToken, time.Now().AddDate(0,0,60), readableUser.ID})
+  if err != nil {
+    fmt.Printf("Error saving refresh token: %s", err)
+    w.WriteHeader(500)
+    return
+  }
+
+  readableUser.RefreshToken = refreshToken
+
+  resStr, err := json.Marshal(readableUser)
+	if err != nil {
+		fmt.Printf("Error Marshalling user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resStr)
+	return
+
+}
+
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
   bearer, err := auth.GetBearerToken(r.Header)
   if err != nil {
@@ -406,6 +502,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", metrics.getAllChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", metrics.getChirp)
 	mux.HandleFunc("POST /api/users", metrics.createUser)
+	mux.HandleFunc("PUT /api/users", metrics.changePassword)
   mux.HandleFunc("POST /api/login", metrics.login)
   mux.HandleFunc("POST /api/refresh", metrics.refresh)
   mux.HandleFunc("POST /api/revoke", metrics.revoke)
